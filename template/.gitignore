@@ -1,0 +1,11 @@
+node_modules/
+dist/
+
+# extract.js output
+card.json
+lorebooks/*
+regex/*
+lua/*
+!lorebooks/.gitkeep
+!regex/.gitkeep
+!lua/.gitkeep

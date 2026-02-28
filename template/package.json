@@ -1,0 +1,24 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "version": "1.0.0",
+  "description": "RisuAI character module — TypeScript → Lua",
+  "scripts": {
+    "build": "tstl",
+    "watch": "tstl --watch",
+    "clean": "rm -rf dist/*",
+    "analyze": "node scripts/analyze.js",
+    "extract": "node scripts/extract.js",
+    "build:components": "node scripts/build-components.js",
+    "build:regex": "node scripts/build-components.js --regex-only",
+    "build:lorebook": "node scripts/build-components.js --lorebook-only"
+  },
+  "devDependencies": {
+    "@typescript-to-lua/language-extensions": "^1.19.0",
+    "fflate": "^0.8.2",
+    "lua-types": "^2.13.1",
+    "luaparse": "^0.3.1",
+    "typescript": "^5.7.3",
+    "typescript-to-lua": "^1.33.2"
+  },
+  "license": "MIT"
+}
