@@ -33,6 +33,11 @@ function writeText(filePath, content) {
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
+function writeBinary(filePath, data) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, data);
+}
+
 function uniquePath(dir, baseName, ext) {
   let candidate = path.join(dir, `${baseName}${ext}`);
   let counter = 1;
@@ -63,6 +68,7 @@ module.exports = {
   ensureDir,
   writeJson,
   writeText,
+  writeBinary,
   uniquePath,
   parsePngChunks,
   buildFolderMap,
