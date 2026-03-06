@@ -80,6 +80,7 @@ const MAX_MODULES_IN_REPORT = 120;
 const argv = process.argv.slice(2);
 const markdownMode = !argv.includes("--no-markdown");
 const htmlMode = !argv.includes("--no-html");
+const jsonMode = argv.includes("--json");
 const helpMode = argv.includes("-h") || argv.includes("--help") || argv.length === 0;
 const cardIdx = argv.indexOf("--card");
 const cardArg = cardIdx >= 0 ? argv[cardIdx + 1] : null;
@@ -90,6 +91,7 @@ if (helpMode || !filePath) {
 
   Options:
     --card <path>     캐릭터 카드 (card.json 또는 .png) — Lua↔Lorebook 상관관계 분석
+    --json            분석 데이터를 JSON 파일로 내보내기
     --no-markdown     마크다운 리포트 생성 안 함
     --no-html         HTML 분석 시트 생성 안 함
     -h, --help        도움말
@@ -175,6 +177,61 @@ const {
 
 const lorebookCorrelation = buildLorebookCorrelation({ cardArg, collected });
 const regexCorrelation = buildRegexCorrelation({ cardArg, collected });
+
+// ═══════════════════════════════════════════════════════════
+// PHASE 3.6: JSON EXPORT (optional, requires --json)
+// ═══════════════════════════════════════════════════════════
+
+function serializeCollected(collected) {
+  // Convert Maps and Sets to plain objects/arrays for JSON serialization
+  const stateVarsObj = {};
+  for (const [key, value] of collected.stateVars) {
+    stateVarsObj[key] = {
+      key: value.key,
+      readBy: Array.from(value.readBy).sort(),
+      writtenBy: Array.from(value.writtenBy).sort(),
+      apis: Array.from(value.apis).sort(),
+      firstWriteValue: value.firstWriteValue,
+      firstWriteFunction: value.firstWriteFunction,
+      firstWriteLine: value.firstWriteLine,
+      hasDualWrite: value.hasDualWrite,
+    };
+  }
+
+  // Serialize functions with state reads/writes as arrays
+  const functionsArray = collected.functions.map((fn) => ({
+    name: fn.name,
+    displayName: fn.displayName,
+    startLine: fn.startLine,
+    endLine: fn.endLine,
+    lineCount: fn.lineCount,
+    isLocal: fn.isLocal,
+    isAsync: fn.isAsync,
+    params: fn.params,
+    parentFunction: fn.parentFunction,
+    isListenEditHandler: fn.isListenEditHandler,
+    listenEditEventType: fn.listenEditEventType,
+    apiCategories: Array.from(fn.apiCategories).sort(),
+    apiNames: Array.from(fn.apiNames).sort(),
+    stateReads: Array.from(fn.stateReads).sort(),
+    stateWrites: Array.from(fn.stateWrites).sort(),
+  }));
+
+  return {
+    stateVars: stateVarsObj,
+    functions: functionsArray,
+    handlers: collected.handlers,
+    apiCalls: collected.apiCalls,
+  };
+}
+
+if (jsonMode) {
+  const serialized = serializeCollected(collected);
+  const baseName = path.basename(filePath, path.extname(filePath));
+  const jsonPath = path.join(path.dirname(filePath), `${baseName}.analysis.json`);
+  fs.writeFileSync(jsonPath, JSON.stringify(serialized, null, 2), "utf-8");
+  console.log(`  ✅ JSON exported to ${jsonPath}`);
+}
 
 // ═══════════════════════════════════════════════════════════
 // PHASE 4: FORMAT — console output + markdown report
