@@ -1,0 +1,23 @@
+{
+  "name": "risu-workbench-vscode",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VSCode extension for RisuAI character card workbench",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {},
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "risu-workbench-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.7.0"
+  }
+}

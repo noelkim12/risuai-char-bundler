@@ -1,0 +1,23 @@
+{
+  "name": "risu-workbench-core",
+  "version": "0.1.0",
+  "description": "Core engine for RisuAI character card workbench",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "risu-core": "bin/risu-core.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "luaparse": "^0.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
