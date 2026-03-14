@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   parsePngTextChunks,
+  stripPngTextChunks,
   buildFolderMap: buildRisuFolderMap,
   resolveFolderName: resolveRisuFolderName,
 } = require("./risu-api");
@@ -71,6 +72,7 @@ module.exports = {
   writeBinary,
   uniquePath,
   parsePngChunks,
+  stripPngTextChunks,
   buildFolderMap,
   resolveFolderName,
 };

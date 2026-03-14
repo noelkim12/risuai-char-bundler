@@ -42,7 +42,7 @@ if (helpMode) {
 
   Notes:
     - card.json은 필수입니다.
-    - lorebooks/, regex/, assets/, html/, variables/가 있으면 card.json 위에 병합합니다.
+    - lorebooks/, regex/, assets/, html/, variables/, character/가 있으면 card.json 위에 병합합니다.
     - lua/*.lua는 자동 역변환하지 않습니다 (기존 card.json의 triggerscript 유지).
     - 현재는 chara_card_v3만 지원합니다.
     - cover를 지정하지 않으면 png/jpg는 1x1 fallback 이미지를 사용합니다.
@@ -106,6 +106,7 @@ function mergeExtractedComponents(card, inRoot) {
   mergeRegex(next, inRoot);
   mergeBackgroundHtml(next, inRoot);
   mergeDefaultVariables(next, inRoot);
+  mergeCharacter(next, inRoot);
 
   return next;
 }
@@ -214,6 +215,64 @@ function mergeDefaultVariables(card, inRoot) {
   const txtPath = path.join(inRoot, "variables", "default.txt");
   if (!fs.existsSync(txtPath)) return;
   card.data.extensions.risuai.defaultVariables = fs.readFileSync(txtPath, "utf-8");
+}
+
+function mergeCharacter(card, inRoot) {
+  const characterDir = path.join(inRoot, "character");
+  if (!isDir(characterDir)) return;
+
+  const textFieldMap = {
+    "description.txt": ["data", "description"],
+    "first_mes.txt": ["data", "first_mes"],
+    "system_prompt.txt": ["data", "system_prompt"],
+    "post_history_instructions.txt": ["data", "post_history_instructions"],
+    "creator_notes.txt": ["data", "creator_notes"],
+    "additional_text.txt": ["data", "extensions", "risuai", "additionalText"],
+  };
+
+  for (const [fileName, targetPath] of Object.entries(textFieldMap)) {
+    const filePath = path.join(characterDir, fileName);
+    if (!fs.existsSync(filePath)) continue;
+    setNestedValue(card, targetPath, fs.readFileSync(filePath, "utf-8"));
+  }
+
+  const greetingsPath = path.join(characterDir, "alternate_greetings.json");
+  if (fs.existsSync(greetingsPath)) {
+    const greetings = readJson(greetingsPath);
+    if (!Array.isArray(greetings)) {
+      fail(`잘못된 alternate_greetings.json 형식: ${greetingsPath}`);
+    }
+    card.data.alternate_greetings = greetings;
+  }
+
+  const metadataPath = path.join(characterDir, "metadata.json");
+  if (!fs.existsSync(metadataPath)) return;
+
+  const metadata = readJson(metadataPath);
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    fail(`잘못된 metadata.json 형식: ${metadataPath}`);
+  }
+
+  const stringMetadataFields = {
+    name: ["data", "name"],
+    creator: ["data", "creator"],
+    character_version: ["data", "character_version"],
+    creation_date: ["data", "creation_date"],
+    modification_date: ["data", "modification_date"],
+  };
+
+  for (const [key, targetPath] of Object.entries(stringMetadataFields)) {
+    if (typeof metadata[key] === "string" || metadata[key] === null) {
+      setNestedValue(card, targetPath, metadata[key]);
+    }
+  }
+
+  if (typeof metadata.utilityBot === "boolean") {
+    card.data.extensions.risuai.utilityBot = metadata.utilityBot;
+  }
+  if (typeof metadata.lowLevelAccess === "boolean") {
+    card.data.extensions.risuai.lowLevelAccess = metadata.lowLevelAccess;
+  }
 }
 
 function resolveTargetFormat(inRoot, formatArgValue) {
@@ -621,6 +680,18 @@ function readJson(filePath) {
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function setNestedValue(root, keys, value) {
+  let cur = root;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i];
+    if (!cur[key] || typeof cur[key] !== "object" || Array.isArray(cur[key])) {
+      cur[key] = {};
+    }
+    cur = cur[key];
+  }
+  cur[keys[keys.length - 1]] = value;
 }
 
 function isDir(p) {

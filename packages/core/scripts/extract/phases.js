@@ -9,6 +9,7 @@ const {
   writeBinary,
   uniquePath,
   parsePngChunks,
+  stripPngTextChunks,
   buildFolderMap,
   resolveFolderName,
 } = require("../shared/extract-helpers");
@@ -32,6 +33,104 @@ function inferLuaFunctionName(code) {
     if (m && m[1]) return m[1];
   }
   return null;
+}
+
+function getLorebookFolderKey(entry) {
+  if (!entry || !Array.isArray(entry.keys) || entry.keys.length === 0) return null;
+  const key = entry.keys[0];
+  return typeof key === "string" && key.length > 0 ? key : null;
+}
+
+function createLorebookDirAllocator() {
+  const usedNamesByParent = new Map();
+
+  return function allocateDir(parentRelDir, rawName) {
+    const parentKey = parentRelDir || "";
+    const used = usedNamesByParent.get(parentKey) || new Set();
+    let candidate = sanitizeFilename(rawName, "unnamed_folder");
+    let serial = 1;
+    while (used.has(candidate)) {
+      candidate = `${sanitizeFilename(rawName, "unnamed_folder")}_${serial}`;
+      serial++;
+    }
+    used.add(candidate);
+    usedNamesByParent.set(parentKey, used);
+    return parentKey ? toPosix(path.join(parentKey, candidate)) : candidate;
+  };
+}
+
+function buildLorebookFolderDirMap(entries, allocateDir) {
+  const folderEntriesByKey = new Map();
+  const resolvedDirs = new Map();
+  const resolving = new Set();
+
+  for (const entry of entries) {
+    if (entry?.mode !== "folder") continue;
+    const key = getLorebookFolderKey(entry);
+    if (!key) continue;
+    folderEntriesByKey.set(key, entry);
+  }
+
+  function resolveDirByKey(folderKey) {
+    if (!folderKey) return "";
+    if (resolvedDirs.has(folderKey)) return resolvedDirs.get(folderKey);
+    if (resolving.has(folderKey)) return sanitizeFilename(folderKey, "unnamed_folder");
+
+    const entry = folderEntriesByKey.get(folderKey);
+    if (!entry) return sanitizeFilename(folderKey, "unnamed_folder");
+
+    resolving.add(folderKey);
+    const parentRelDir = entry.folder ? resolveDirByKey(entry.folder) : "";
+    const relDir = allocateDir(parentRelDir, entry.name || entry.comment || folderKey);
+    resolvedDirs.set(folderKey, relDir);
+    resolving.delete(folderKey);
+    return relDir;
+  }
+
+  for (const folderKey of folderEntriesByKey.keys()) {
+    resolveDirByKey(folderKey);
+  }
+
+  return resolvedDirs;
+}
+
+function extractLorebookRows(entries, lorebooksDir, source, manifestEntries, orderList, allocateDir) {
+  if (!Array.isArray(entries) || entries.length === 0) return 0;
+
+  const fallbackFolderMap = buildFolderMap(entries);
+  const folderDirMap = buildLorebookFolderDirMap(entries, allocateDir);
+  let count = 0;
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const name = sanitizeFilename(entry.name || entry.comment || `entry_${i}`);
+
+    if (entry.mode === "folder") {
+      const folderKey = getLorebookFolderKey(entry);
+      const relDir = folderKey && folderDirMap.has(folderKey)
+        ? folderDirMap.get(folderKey)
+        : allocateDir("", entry.name || entry.comment || `folder_${i}`);
+
+      ensureDir(path.join(lorebooksDir, relDir));
+      manifestEntries.push({ type: "folder", source, dir: relDir, data: entry });
+      count++;
+      continue;
+    }
+
+    const relDir = entry.folder
+      ? (folderDirMap.get(entry.folder) || resolveFolderName(entry.folder, fallbackFolderMap) || "")
+      : "";
+    const dir = relDir ? path.join(lorebooksDir, relDir) : lorebooksDir;
+    const outPath = uniquePath(dir, name, ".json");
+    const relPath = toPosix(path.relative(lorebooksDir, outPath));
+
+    writeJson(outPath, entry);
+    orderList.push(relPath);
+    manifestEntries.push({ type: "entry", source, path: relPath });
+    count++;
+  }
+
+  return count;
 }
 
 function phase1_parseCard(inputPath) {
@@ -88,7 +187,7 @@ function phase1_parseCard(inputPath) {
       console.log(`     에셋: ${assetCount}개`);
     }
 
-    return { card, assetSources: assets };
+    return { card, assetSources: assets, mainImage: null };
   }
 
   if (ext === ".png") {
@@ -132,7 +231,7 @@ function phase1_parseCard(inputPath) {
     console.log(`     spec: ${card.spec || "unknown"}`);
     console.log(`     이름: ${card.data?.name || card.name || "unknown"}`);
 
-    return { card, assetSources };
+    return { card, assetSources, mainImage: stripPngTextChunks(buf) };
   }
 
   if (ext === ".json") {
@@ -140,7 +239,7 @@ function phase1_parseCard(inputPath) {
     const card = JSON.parse(buf.toString("utf-8"));
     console.log(`     spec: ${card.spec || "unknown"}`);
     console.log(`     이름: ${card.data?.name || card.name || "unknown"}`);
-    return { card, assetSources: {} };
+    return { card, assetSources: {}, mainImage: null };
   }
 
   console.error(`  ❌ 지원하지 않는 파일 포맷: ${ext}`);
@@ -154,61 +253,28 @@ function phase2_extractLorebooks(card, outputDir) {
   const lorebooksDir = path.join(outputDir, "lorebooks");
   let count = 0;
   const orderList = [];
+  const manifestEntries = [];
+  const allocateDir = createLorebookDirAllocator();
 
   const charBook = card.data?.character_book;
   if (charBook && charBook.entries && charBook.entries.length > 0) {
     console.log(`     character_book.entries: ${charBook.entries.length}개`);
-
-    const folderMap = buildFolderMap(charBook.entries);
-
-    for (let i = 0; i < charBook.entries.length; i++) {
-      const entry = charBook.entries[i];
-      const name = sanitizeFilename(entry.name || entry.comment || `entry_${i}`);
-
-      if (entry.mode === "folder") {
-        const metaPath = uniquePath(lorebooksDir, `_folder_${name}`, ".json");
-        writeJson(metaPath, entry);
-        orderList.push(toPosix(path.relative(lorebooksDir, metaPath)));
-        count++;
-        continue;
-      }
-
-      const folderName = resolveFolderName(entry.folder, folderMap);
-      const dir = folderName ? path.join(lorebooksDir, folderName) : lorebooksDir;
-      const outPath = uniquePath(dir, name, ".json");
-      writeJson(outPath, entry);
-      orderList.push(toPosix(path.relative(lorebooksDir, outPath)));
-      count++;
-    }
+    count += extractLorebookRows(charBook.entries, lorebooksDir, "character", manifestEntries, orderList, allocateDir);
   }
 
   const moduleLorebook = card.data?.extensions?.risuai?._moduleLorebook;
   if (moduleLorebook && moduleLorebook.length > 0) {
     console.log(`     module lorebook: ${moduleLorebook.length}개`);
-
-    const folderMap = buildFolderMap(moduleLorebook);
-
-    for (let i = 0; i < moduleLorebook.length; i++) {
-      const lore = moduleLorebook[i];
-      const name = sanitizeFilename(lore.comment || `lore_${i}`);
-
-      if (lore.mode === "folder") {
-        const metaPath = uniquePath(lorebooksDir, `_folder_${name}`, ".json");
-        writeJson(metaPath, lore);
-        orderList.push(toPosix(path.relative(lorebooksDir, metaPath)));
-        count++;
-        continue;
-      }
-
-      const folderName = resolveFolderName(lore.folder, folderMap);
-      const dir = folderName ? path.join(lorebooksDir, folderName) : lorebooksDir;
-      const outPath = uniquePath(dir, name, ".json");
-      writeJson(outPath, lore);
-      orderList.push(toPosix(path.relative(lorebooksDir, outPath)));
-      count++;
-    }
+    count += extractLorebookRows(moduleLorebook, lorebooksDir, "module", manifestEntries, orderList, allocateDir);
 
     delete card.data.extensions.risuai._moduleLorebook;
+  }
+
+  if (manifestEntries.length > 0) {
+    writeJson(path.join(lorebooksDir, "manifest.json"), {
+      version: 1,
+      entries: manifestEntries,
+    });
   }
 
   if (orderList.length > 0) {
@@ -317,7 +383,14 @@ function detectSourceFormat(assetSources) {
   return "charx";
 }
 
-function phase5_extractAssets(card, outputDir, assetSources) {
+function assetTypeToSubdir(type, name) {
+  if (type === "icon") return "icons";
+  if (type === "x-risu-asset") return "additional";
+  if (type === "emotion") return "emotions";
+  return "other";
+}
+
+function phase5_extractAssets(card, outputDir, assetSources, mainImage) {
   const assets = card.data?.assets;
   if (assets == null) {
     console.log("     (V2 카드 — assets 배열 없음)");
@@ -344,9 +417,12 @@ function phase5_extractAssets(card, outputDir, assetSources) {
     assets: [],
   };
 
+  const subdirCounts = {};
+
   for (let i = 0; i < assets.length; i++) {
     const asset = assets[i];
     const resolved = resolveAssetUri(asset?.uri, assetSources);
+    const subdir = assetTypeToSubdir(asset?.type, asset?.name);
     const entry = {
       index: i,
       original_uri: asset?.uri,
@@ -355,6 +431,7 @@ function phase5_extractAssets(card, outputDir, assetSources) {
       type: asset?.type || null,
       name: asset?.name || null,
       ext: asset?.ext || null,
+      subdir: subdir,
       size_bytes: null,
     };
 
@@ -374,9 +451,22 @@ function phase5_extractAssets(card, outputDir, assetSources) {
     }
 
     if (resolved.type === "ccdefault") {
-      entry.status = "pointer_to_main_image";
+      if (mainImage) {
+        const targetDir = path.join(assetsDir, subdir);
+        const ccExt = asset?.ext ? "." + String(asset.ext).replace(/^\./, "") : ".png";
+        const ccBaseName = sanitizeFilename(asset?.name || "main");
+        const ccOutPath = uniquePath(targetDir, ccBaseName, ccExt);
+        writeBinary(ccOutPath, mainImage);
+        entry.extracted_path = subdir + "/" + path.basename(ccOutPath);
+        entry.status = "extracted";
+        entry.size_bytes = mainImage.length;
+        manifest.extracted++;
+        subdirCounts[subdir] = (subdirCounts[subdir] || 0) + 1;
+      } else {
+        entry.status = "pointer_to_main_image";
+        manifest.skipped++;
+      }
       manifest.assets.push(entry);
-      manifest.skipped++;
       continue;
     }
 
@@ -388,25 +478,30 @@ function phase5_extractAssets(card, outputDir, assetSources) {
       continue;
     }
 
+    const targetDir = path.join(assetsDir, subdir);
     const ext = asset?.ext
       ? "." + String(asset.ext).replace(/^\./, "")
       : guessMimeExt(resolved.metadata?.mime || "");
     const baseName = sanitizeFilename(asset?.name || "asset_" + i);
-    const outPath = uniquePath(assetsDir, baseName, ext);
+    const outPath = uniquePath(targetDir, baseName, ext);
     writeBinary(outPath, resolved.data);
 
-    entry.extracted_path = path.basename(outPath);
+    entry.extracted_path = subdir + "/" + path.basename(outPath);
     entry.status = "extracted";
     entry.size_bytes = resolved.data.length;
     manifest.extracted++;
+    subdirCounts[subdir] = (subdirCounts[subdir] || 0) + 1;
     manifest.assets.push(entry);
   }
 
   writeJson(path.join(assetsDir, "manifest.json"), manifest);
+  const breakdown = Object.entries(subdirCounts)
+    .map(([dir, count]) => `${dir}: ${count}`)
+    .join(", ");
   console.log(
     "     ✅ " +
       manifest.extracted +
-      "개 추출, " +
+      "개 추출 (" + breakdown + "), " +
       manifest.skipped +
       "개 스킵 → " +
       path.relative(".", assetsDir) +
@@ -462,6 +557,59 @@ function phase7_extractVariables(card, outputDir) {
   return count;
 }
 
+function phase8_extractCharacterCard(card, outputDir) {
+  console.log("\n  🧾 Phase 8: Character Card 추출");
+
+  const data = card.data || {};
+  const risuai = data.extensions?.risuai || {};
+  const characterDir = path.join(outputDir, "character");
+
+  const textFields = {
+    "description.txt": data.description || "",
+    "first_mes.txt": data.first_mes || "",
+    "system_prompt.txt": data.system_prompt || "",
+    "post_history_instructions.txt": data.post_history_instructions || "",
+    "creator_notes.txt": data.creator_notes || "",
+    "additional_text.txt": risuai.additionalText || "",
+  };
+
+  let fileCount = 0;
+  for (const [filename, content] of Object.entries(textFields)) {
+    writeText(path.join(characterDir, filename), content);
+    fileCount++;
+  }
+
+  const greetings = Array.isArray(data.alternate_greetings)
+    ? data.alternate_greetings
+    : [];
+  writeJson(path.join(characterDir, "alternate_greetings.json"), greetings);
+  fileCount++;
+
+  const metadata = {
+    name: data.name || "",
+    creator: data.creator || "",
+    character_version: data.character_version || "",
+    creation_date: data.creation_date || null,
+    modification_date: data.modification_date || null,
+    utilityBot: risuai.utilityBot ?? false,
+    lowLevelAccess: risuai.lowLevelAccess ?? false,
+  };
+  writeJson(path.join(characterDir, "metadata.json"), metadata);
+  fileCount++;
+
+  console.log(
+    "     텍스트: " + Object.keys(textFields).length + "개, " +
+      "greetings: " + greetings.length + "개, metadata: " +
+      Object.keys(metadata).length + "개 필드"
+  );
+  console.log(
+    "     ✅ " + fileCount + "개 파일 → " +
+      path.relative(".", characterDir) + "/"
+  );
+
+  return fileCount;
+}
+
 module.exports = {
   phase1_parseCard,
   phase2_extractLorebooks,
@@ -470,4 +618,5 @@ module.exports = {
   phase5_extractAssets,
   phase6_extractBackgroundHTML,
   phase7_extractVariables,
+  phase8_extractCharacterCard,
 };

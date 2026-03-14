@@ -143,37 +143,79 @@ function collectLorebookCBS(card, outputDir) {
 }
 
 function collectLorebookCBSFromDir(lorebooksDir) {
+  const manifestPath = path.join(lorebooksDir, 'manifest.json');
+  const manifest = readJsonIfExists(manifestPath);
+  if (isPlainObject(manifest) && Array.isArray(manifest.entries)) {
+    return collectLorebookCBSFromManifest(lorebooksDir, manifest.entries);
+  }
+
   const files = resolveOrderedFiles(lorebooksDir, listJsonFilesRecursive(lorebooksDir));
   if (files.length === 0) return [];
 
   const results = [];
 
   for (const filePath of files) {
-    const raw = readJsonIfExists(filePath);
-    if (!raw) continue;
-
     const relPosix = toPosix(path.relative(lorebooksDir, filePath));
-    const baseName = stripJsonExt(relPosix);
-
-    const entries = Array.isArray(raw) ? raw : [raw];
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
-      if (!entry || typeof entry !== 'object') continue;
-
-      const mode = entry.mode || (entry.data && entry.data.mode);
-      if (mode === 'folder') continue;
-
-      const content = getStringField(entry, 'content');
-      const { reads, writes } = extractCBSVarOps(content || '');
-
-      if (reads.size === 0 && writes.size === 0) continue;
-
-      const elementName = entries.length > 1 ? `${baseName}#${i}` : baseName;
-      results.push({ elementType: ELEMENT_TYPES.LOREBOOK, elementName, reads, writes });
-    }
+    pushLorebookCBSFromFile(results, filePath, relPosix, null);
   }
 
   return results;
+}
+
+function collectLorebookCBSFromManifest(lorebooksDir, manifestEntries) {
+  const files = listJsonFilesRecursive(lorebooksDir);
+  const fileMap = new Map();
+  for (const filePath of files) {
+    const rel = toPosix(path.relative(lorebooksDir, filePath));
+    fileMap.set(rel, filePath);
+  }
+
+  const usedFiles = new Set();
+  const results = [];
+
+  for (const rec of manifestEntries) {
+    if (!isPlainObject(rec)) continue;
+    if (rec.type !== 'entry' || typeof rec.path !== 'string' || rec.path.length === 0) continue;
+
+    const rel = toPosix(rec.path);
+    const filePath = fileMap.get(rel);
+    if (!filePath) continue;
+
+    usedFiles.add(rel);
+    pushLorebookCBSFromFile(results, filePath, rel, rec.source === 'module' ? 'module' : null);
+  }
+
+  const orphans = [...fileMap.keys()]
+    .filter((rel) => !usedFiles.has(rel))
+    .sort((a, b) => a.localeCompare(b));
+  for (const rel of orphans) {
+    pushLorebookCBSFromFile(results, fileMap.get(rel), rel, null);
+  }
+
+  return results;
+}
+
+function pushLorebookCBSFromFile(results, filePath, relPosix, source) {
+  const raw = readJsonIfExists(filePath);
+  if (!raw) return;
+
+  const baseName = stripJsonExt(relPosix);
+  const entries = Array.isArray(raw) ? raw : [raw];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry || typeof entry !== 'object') continue;
+
+    const mode = entry.mode || (entry.data && entry.data.mode);
+    if (mode === 'folder') continue;
+
+    const content = getStringField(entry, 'content');
+    const { reads, writes } = extractCBSVarOps(content || '');
+    if (reads.size === 0 && writes.size === 0) continue;
+
+    const leafName = entries.length > 1 ? `${baseName}#${i}` : baseName;
+    const elementName = source === 'module' ? `[module]/${leafName}` : leafName;
+    results.push({ elementType: ELEMENT_TYPES.LOREBOOK, elementName, reads, writes });
+  }
 }
 
 function collectLorebookCBSFromCard(card) {
@@ -621,4 +663,3 @@ module.exports = {
   collectHTMLCBS,
   collectTSCBS
 };
-

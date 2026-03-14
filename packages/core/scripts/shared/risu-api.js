@@ -113,8 +113,35 @@ function parseCardFile(cardPath) {
   return null;
 }
 
+function stripPngTextChunks(buf) {
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    return buf;
+  }
+
+  const kept = [PNG_SIGNATURE];
+  let pos = 8;
+
+  while (pos + 12 <= buf.length) {
+    const length = buf.readUInt32BE(pos);
+    const type = buf.toString("ascii", pos + 4, pos + 8);
+    const chunkSize = 12 + length;
+
+    if (pos + chunkSize > buf.length) break;
+
+    if (type !== "tEXt" && type !== "iTXt" && type !== "zTXt") {
+      kept.push(buf.subarray(pos, pos + chunkSize));
+    }
+
+    pos += chunkSize;
+    if (type === "IEND") break;
+  }
+
+  return Buffer.concat(kept);
+}
+
 module.exports = {
   parsePngTextChunks,
+  stripPngTextChunks,
   decodeCharacterJsonFromChunks,
   buildFolderMap,
   resolveFolderName,

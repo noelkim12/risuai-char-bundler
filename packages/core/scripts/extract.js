@@ -11,6 +11,7 @@ const {
   phase5_extractAssets,
   phase6_extractBackgroundHTML,
   phase7_extractVariables,
+  phase8_extractCharacterCard,
 } = require("./extract/phases");
 
 const argv = process.argv.slice(2);
@@ -40,8 +41,9 @@ if (helpMode || !filePath) {
     5. 에셋 바이너리 추출 → assets/ + assets/manifest.json
     6. backgroundHTML 추출 → html/background.html
     7. defaultVariables 추출 → variables/default.txt + default.json
-    8. Lua 분석 (analyze.js)
-    9. 카드 종합 분석 (analyze-card.js) → analysis/
+    8. Character Card 추출 → character/ (identity, messages, prompting, metadata, extensions)
+    9. Lua 분석 (analyze.js)
+    10. 카드 종합 분석 (analyze-card.js) → analysis/
 
   Examples:
     node extract.js mychar.charx
@@ -63,7 +65,7 @@ function runLuaAnalysis(resolvedOutDir, cardJsonPath) {
   const luaFiles = fs.readdirSync(luaDir).filter((f) => f.endsWith(".lua"));
   if (luaFiles.length === 0) return;
 
-  console.log("\n  ═══ Phase 8: Lua Analysis ═══");
+  console.log("\n  ═══ Phase 9: Lua Analysis ═══");
   const analyzeScript = path.join(__dirname, "analyze.js");
   if (!fs.existsSync(analyzeScript)) {
     console.log("     ⚠️ analyze.js를 찾을 수 없습니다: " + analyzeScript);
@@ -88,7 +90,7 @@ function runCardAnalysis(resolvedOutDir, cardJsonPath) {
   // Check if card.json exists (it always should at this point)
   if (!fs.existsSync(cardJsonPath)) return;
 
-  console.log("\n  ═══ Phase 9: Card Analysis ═══");
+  console.log("\n  ═══ Phase 10: Card Analysis ═══");
   const analyzeCardScript = path.join(__dirname, "analyze-card.js");
   if (!fs.existsSync(analyzeCardScript)) {
     console.log("     ⚠️ analyze-card.js를 찾을 수 없습니다: " + analyzeCardScript);
@@ -109,7 +111,7 @@ function runCardAnalysis(resolvedOutDir, cardJsonPath) {
 function main() {
   console.log(`\n  🐿️ RisuAI Character Card Extractor\n`);
 
-  const { card, assetSources } = phase1_parseCard(filePath);
+  const { card, assetSources, mainImage } = phase1_parseCard(filePath);
 
   const resolvedOutDir = path.resolve(outDir);
   ensureDir(resolvedOutDir);
@@ -125,9 +127,10 @@ function main() {
   phase2_extractLorebooks(card, resolvedOutDir);
   phase3_extractRegex(card, resolvedOutDir);
   phase4_extractTriggerLua(card, resolvedOutDir);
-  phase5_extractAssets(card, resolvedOutDir, assetSources);
+  phase5_extractAssets(card, resolvedOutDir, assetSources, mainImage);
   phase6_extractBackgroundHTML(card, resolvedOutDir);
   phase7_extractVariables(card, resolvedOutDir);
+  phase8_extractCharacterCard(card, resolvedOutDir);
   runLuaAnalysis(resolvedOutDir, cardJsonPath);
   runCardAnalysis(resolvedOutDir, cardJsonPath);
 
